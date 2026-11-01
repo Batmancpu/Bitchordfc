@@ -122,6 +122,14 @@ android {
             dimension = "env"
             // Matches defaultConfig — this is the package already shipped/installed.
         }
+        // Installable alongside the original BitChord package. ColorOS 15's
+        // music Live Alerts whitelist includes Spotify's application ID.
+        // Keep the Kotlin namespace unchanged so no app code or components move.
+        create("spotify") {
+            dimension = "env"
+            applicationId = "com.spotify.music"
+            resValue("string", "app_name", "BitChord FC")
+        }
     }
 
     signingConfigs {
