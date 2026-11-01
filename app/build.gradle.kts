@@ -84,6 +84,11 @@ android {
         // the same GitHub release, told apart by file name. See
         // AppUpdateChecker.apkAssetUrl.
         buildConfigField("String", "UPDATE_APK_PREFIX", "\"BitChord-\"")
+        buildConfigField(
+            "String",
+            "UPDATE_RELEASE_URL",
+            "\"https://api.github.com/repos/kushagrasinghx/BitChord/releases/latest\"",
+        )
     }
 
     splits {
@@ -129,6 +134,13 @@ android {
             dimension = "env"
             applicationId = "com.spotify.music"
             resValue("string", "app_name", "BitChord FC")
+            // BitChord FC checks its own fork's Releases, not upstream BitChord.
+            buildConfigField("String", "UPDATE_APK_PREFIX", "\"BitChordFC-\"")
+            buildConfigField(
+                "String",
+                "UPDATE_RELEASE_URL",
+                "\"https://api.github.com/repos/Batmancpu/Bitchordfc/releases/latest\"",
+            )
         }
     }
 
