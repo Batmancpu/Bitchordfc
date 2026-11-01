@@ -41,8 +41,13 @@ buildscript {
  * No "v" in the name — the in-app updater reads it as a number; the "v" is the
  * release tag's alone.
  */
-extra["bitchordVersionCode"] = 36
-extra["bitchordVersionName"] = "1.9"
+val defaultBitchordVersionCode = 36
+val defaultBitchordVersionName = "1.9"
+
+extra["bitchordVersionCode"] =
+    providers.gradleProperty("bitchordVersionCode").orNull?.toIntOrNull() ?: defaultBitchordVersionCode
+extra["bitchordVersionName"] =
+    providers.gradleProperty("bitchordVersionName").orNull ?: defaultBitchordVersionName
 
 /*
  * Bump this by hand before cutting each sideloaded test build ("beta2",
