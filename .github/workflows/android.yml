@@ -52,7 +52,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "${{ secrets.LASTFM_API_KEY }}" > local.properties
+          echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" > local.properties
           echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
           echo "LISTEN_TOGETHER_SERVER=${{ secrets.LISTEN_TOGETHER_SERVER }}" >> local.properties
 
@@ -122,7 +122,7 @@ jobs:
                 fi
               done
               if [[ -n "$abi" ]]; then
-                cp "$apk" "release-assets/$prefix-$VERSION_NAME_$abi.apk"
+                cp "$apk" "release-assets/$prefix-${VERSION_NAME}_${abi}.apk"
               fi
             done
           }
