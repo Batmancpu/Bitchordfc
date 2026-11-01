@@ -60,6 +60,13 @@ android {
             dimension = "env"
             resValue("string", "app_name", "BitChord")
         }
+        // Match the phone flavor's application ID so the Wearable Data Layer
+        // continues to pair with the Fluid Cloud build.
+        create("spotify") {
+            dimension = "env"
+            applicationId = "com.spotify.music"
+            resValue("string", "app_name", "BitChord FC")
+        }
     }
 
     signingConfigs {
