@@ -4,9 +4,19 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      build_variant:
+        description: "APK identity to build"
+        required: true
+        default: "prod"
+        type: choice
+        options:
+          - prod
+          - spotify
 
 jobs:
   build-prod-release:
+    if: github.event_name == 'push' || inputs.build_variant == 'prod'
     runs-on: ubuntu-latest
 
     steps:
@@ -54,3 +64,53 @@ jobs:
       with:
         name: bitchord-wear-prod-release-signed
         path: wearos/build/outputs/apk/prod/release/*.apk
+
+
+  # Manual-only variant: a parallel app identity for ColorOS 15 Fluid Cloud.
+  # The original prod build and its release/watch APKs remain unchanged on pushes.
+  build-fluid-cloud-release:
+    if: github.event_name == 'workflow_dispatch' && inputs.build_variant == 'spotify'
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+
+    - name: Setup Secrets (Keystore & local.properties)
+      run: |
+        echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" > local.properties
+        echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
+        echo "LISTEN_TOGETHER_SERVER=${{ secrets.LISTEN_TOGETHER_SERVER }}" >> local.properties
+
+        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > bitchord-release.jks
+        {
+          echo "storeFile=bitchord-release.jks"
+          echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}"
+          echo "keyAlias=${{ secrets.KEY_ALIAS }}"
+          echo "keyPassword=${{ secrets.KEY_PASSWORD }}"
+        } > keystore.properties
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Build Signed Fluid Cloud APK
+      run: ./gradlew assembleSpotifyRelease
+
+    - name: Upload Fluid Cloud APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: bitchord-fc-fluid-cloud-release-signed
+        path: app/build/outputs/apk/spotify/release/*.apk
+
+    - name: Upload Matching Wear OS APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: bitchord-fc-wear-fluid-cloud-release-signed
+        path: wearos/build/outputs/apk/spotify/release/*.apk
