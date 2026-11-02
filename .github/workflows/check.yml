@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_release:
-        description: "Publish BitChord FC after the Android phone checks pass"
+        description: "Publish the BitChord FC pre-release after Android phone checks pass"
         required: true
         default: true
         type: boolean
@@ -41,9 +41,9 @@ jobs:
           LISTEN_TOGETHER_SERVER: ${{ secrets.LISTEN_TOGETHER_SERVER }}
         run: |
           {
-            printf 'LASTFM_API_KEY=%s\n' "$LASTFM_API_KEY"
-            printf 'LASTFM_SECRET=%s\n' "$LASTFM_SECRET"
-            printf 'LISTEN_TOGETHER_SERVER=%s\n' "$LISTEN_TOGETHER_SERVER"
+            printf 'LASTFM_API_KEY=%s\\n' "$LASTFM_API_KEY"
+            printf 'LASTFM_SECRET=%s\\n' "$LASTFM_SECRET"
+            printf 'LISTEN_TOGETHER_SERVER=%s\\n' "$LISTEN_TOGETHER_SERVER"
           } > local.properties
 
       - run: chmod +x gradlew
@@ -69,7 +69,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Calculate unique Android release version
+      - name: Calculate unique Android pre-release version
         id: version
         shell: bash
         run: |
@@ -83,58 +83,30 @@ jobs:
           VERSION_CODE=$((100000 + GITHUB_RUN_NUMBER))
           echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
           echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
-          echo "BitChord FC version: $VERSION_NAME (versionCode $VERSION_CODE)"
+          echo "BitChord FC pre-release: $VERSION_NAME (versionCode $VERSION_CODE)"
 
-      - name: Validate and configure a persistent signing key
+      - name: Generate one-off pre-release signing key
         shell: bash
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
           set -euo pipefail
-          STORE_FILE="bitchord-release.jks"
-          STORE_PASSWORD=""
-          ALIAS=""
-          KEY_PASS=""
-
-          if [[ -n "$KEYSTORE_BASE64" && -n "$KEYSTORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
-            rm -f "$STORE_FILE"
-            if printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$STORE_FILE" 2>/dev/null &&
-               [[ -s "$STORE_FILE" ]] &&
-               keytool -list -keystore "$STORE_FILE" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
-              STORE_PASSWORD="$KEYSTORE_PASSWORD"
-              ALIAS="$KEY_ALIAS"
-              KEY_PASS="$KEY_PASSWORD"
-              echo "Using the configured release keystore."
-            fi
-          fi
-
-          if [[ -z "$STORE_PASSWORD" && -n "$DEBUG_KEYSTORE_BASE64" ]]; then
-            rm -f "$STORE_FILE"
-            if printf '%s' "$DEBUG_KEYSTORE_BASE64" | base64 --decode > "$STORE_FILE" 2>/dev/null &&
-               [[ -s "$STORE_FILE" ]] &&
-               keytool -list -keystore "$STORE_FILE" -storepass android -alias androiddebugkey >/dev/null 2>&1; then
-              STORE_PASSWORD="android"
-              ALIAS="androiddebugkey"
-              KEY_PASS="android"
-              echo "::warning::Using the persistent DEBUG_KEYSTORE_BASE64 signing key. Keep this secret unchanged for all future updates."
-            fi
-          fi
-
-          if [[ -z "$STORE_PASSWORD" ]]; then
-            echo "::error::No valid persistent signing keystore is configured. Fix KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD, or add a valid stable DEBUG_KEYSTORE_BASE64 secret. Build stopped before Gradle to protect future update compatibility."
-            exit 1
-          fi
-
+          STORE_FILE="bitchord-fc-prerelease.jks"
+          STORE_PASSWORD="$(openssl rand -hex 24)"
+          ALIAS="bitchordfc-prerelease"
+          keytool -genkeypair -v \\
+            -keystore "$STORE_FILE" \\
+            -storetype JKS \\
+            -storepass "$STORE_PASSWORD" \\
+            -keypass "$STORE_PASSWORD" \\
+            -alias "$ALIAS" \\
+            -keyalg RSA -keysize 2048 -validity 10000 \\
+            -dname "CN=BitChord FC Temporary Pre-release"
           {
-            printf 'storeFile=%s\n' "$STORE_FILE"
-            printf 'storePassword=%s\n' "$STORE_PASSWORD"
-            printf 'keyAlias=%s\n' "$ALIAS"
-            printf 'keyPassword=%s\n' "$KEY_PASS"
+            printf 'storeFile=%s\\n' "$STORE_FILE"
+            printf 'storePassword=%s\\n' "$STORE_PASSWORD"
+            printf 'keyAlias=%s\\n' "$ALIAS"
+            printf 'keyPassword=%s\\n' "$STORE_PASSWORD"
           } > keystore.properties
+          echo "::warning::This pre-release uses a one-off signing key. A later build with a different key cannot update it; uninstall this build before installing a future build."
 
       - name: Write local.properties
         env:
@@ -143,9 +115,9 @@ jobs:
           LISTEN_TOGETHER_SERVER: ${{ secrets.LISTEN_TOGETHER_SERVER }}
         run: |
           {
-            printf 'LASTFM_API_KEY=%s\n' "$LASTFM_API_KEY"
-            printf 'LASTFM_SECRET=%s\n' "$LASTFM_SECRET"
-            printf 'LISTEN_TOGETHER_SERVER=%s\n' "$LISTEN_TOGETHER_SERVER"
+            printf 'LASTFM_API_KEY=%s\\n' "$LASTFM_API_KEY"
+            printf 'LASTFM_SECRET=%s\\n' "$LASTFM_SECRET"
+            printf 'LISTEN_TOGETHER_SERVER=%s\\n' "$LISTEN_TOGETHER_SERVER"
           } > local.properties
 
       - run: chmod +x gradlew
@@ -157,7 +129,7 @@ jobs:
           -PbitchordVersionCode=${{ steps.version.outputs.code }}
           -PbitchordVersionName=${{ steps.version.outputs.name }}
 
-      - name: Prepare universal APK and SHA-256 checksum
+      - name: Verify universal APK, package ID and signature
         shell: bash
         env:
           VERSION_NAME: ${{ steps.version.outputs.name }}
@@ -184,12 +156,33 @@ jobs:
             exit 1
           fi
 
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [[ -z "$SDK_ROOT" ]]; then
+            echo "::error::Android SDK path is unavailable."
+            exit 1
+          fi
+          AAPT="$(find "$SDK_ROOT/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+          APKSIGNER="$(find "$SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          if [[ -z "$AAPT" || -z "$APKSIGNER" ]]; then
+            echo "::error::Android APK verification tools are unavailable."
+            exit 1
+          fi
+
+          APP_ID="$("$AAPT" dump badging "$universal" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p")"
+          if [[ "$APP_ID" != "com.spotify.music" ]]; then
+            echo "::error::Expected application ID com.spotify.music, found '$APP_ID'."
+            exit 1
+          fi
+          "$APKSIGNER" verify --verbose "$universal"
+
           cp "$universal" "release-assets/BitChordFC-$VERSION_NAME.apk"
           (
             cd release-assets
             sha256sum ./*.apk > SHA256SUMS.txt
           )
+          test -s "release-assets/BitChordFC-$VERSION_NAME.apk"
           ls -lh release-assets
+          echo "Verified application ID: $APP_ID"
 
       - name: Preserve downloadable Actions artifact
         uses: actions/upload-artifact@v4
@@ -199,13 +192,17 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish BitChord FC to GitHub Releases
+      - name: Publish BitChord FC pre-release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.name }}
-          name: BitChord FC v${{ steps.version.outputs.name }}
-          make_latest: true
+          name: BitChord FC v${{ steps.version.outputs.name }} (Pre-release)
+          prerelease: true
+          make_latest: false
           generate_release_notes: true
           fail_on_unmatched_files: true
           overwrite_files: true
+          body: |
+            Pre-release signed with a one-off CI key. To install a later build signed with a different key, uninstall this version first; uninstalling removes its app data.
+          append_body: true
           files: release-assets/*
