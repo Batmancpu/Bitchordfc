@@ -41,9 +41,9 @@ jobs:
           LISTEN_TOGETHER_SERVER: ${{ secrets.LISTEN_TOGETHER_SERVER }}
         run: |
           {
-            printf 'LASTFM_API_KEY=%s\\n' "$LASTFM_API_KEY"
-            printf 'LASTFM_SECRET=%s\\n' "$LASTFM_SECRET"
-            printf 'LISTEN_TOGETHER_SERVER=%s\\n' "$LISTEN_TOGETHER_SERVER"
+            printf 'LASTFM_API_KEY=%s\n' "$LASTFM_API_KEY"
+            printf 'LASTFM_SECRET=%s\n' "$LASTFM_SECRET"
+            printf 'LISTEN_TOGETHER_SERVER=%s\n' "$LISTEN_TOGETHER_SERVER"
           } > local.properties
 
       - run: chmod +x gradlew
@@ -74,7 +74,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BASE_VERSION="$(sed -nE 's/^val defaultBitchordVersionName = "([^"]+)".*/\\1/p' build.gradle.kts | head -n 1)"
+          BASE_VERSION="$(awk -F'"' '/^val defaultBitchordVersionName = / {print $2; exit}' build.gradle.kts)"
           if [[ -z "$BASE_VERSION" ]]; then
             echo "::error::Could not read defaultBitchordVersionName from build.gradle.kts"
             exit 1
@@ -92,19 +92,12 @@ jobs:
           STORE_FILE="bitchord-fc-prerelease.jks"
           STORE_PASSWORD="$(openssl rand -hex 24)"
           ALIAS="bitchordfc-prerelease"
-          keytool -genkeypair -v \\
-            -keystore "$STORE_FILE" \\
-            -storetype JKS \\
-            -storepass "$STORE_PASSWORD" \\
-            -keypass "$STORE_PASSWORD" \\
-            -alias "$ALIAS" \\
-            -keyalg RSA -keysize 2048 -validity 10000 \\
-            -dname "CN=BitChord FC Temporary Pre-release"
+          keytool -genkeypair -v -keystore "$STORE_FILE" -storetype JKS -storepass "$STORE_PASSWORD" -keypass "$STORE_PASSWORD" -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=BitChord FC Temporary Pre-release"
           {
-            printf 'storeFile=%s\\n' "$STORE_FILE"
-            printf 'storePassword=%s\\n' "$STORE_PASSWORD"
-            printf 'keyAlias=%s\\n' "$ALIAS"
-            printf 'keyPassword=%s\\n' "$STORE_PASSWORD"
+            printf 'storeFile=%s\n' "$STORE_FILE"
+            printf 'storePassword=%s\n' "$STORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$ALIAS"
+            printf 'keyPassword=%s\n' "$STORE_PASSWORD"
           } > keystore.properties
           echo "::warning::This pre-release uses a one-off signing key. A later build with a different key cannot update it; uninstall this build before installing a future build."
 
@@ -115,9 +108,9 @@ jobs:
           LISTEN_TOGETHER_SERVER: ${{ secrets.LISTEN_TOGETHER_SERVER }}
         run: |
           {
-            printf 'LASTFM_API_KEY=%s\\n' "$LASTFM_API_KEY"
-            printf 'LASTFM_SECRET=%s\\n' "$LASTFM_SECRET"
-            printf 'LISTEN_TOGETHER_SERVER=%s\\n' "$LISTEN_TOGETHER_SERVER"
+            printf 'LASTFM_API_KEY=%s\n' "$LASTFM_API_KEY"
+            printf 'LASTFM_SECRET=%s\n' "$LASTFM_SECRET"
+            printf 'LISTEN_TOGETHER_SERVER=%s\n' "$LISTEN_TOGETHER_SERVER"
           } > local.properties
 
       - run: chmod +x gradlew
@@ -168,7 +161,7 @@ jobs:
             exit 1
           fi
 
-          APP_ID="$("$AAPT" dump badging "$universal" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p")"
+          APP_ID="$("$AAPT" dump badging "$universal" | awk -F"'" '/^package:/{print $2; exit}')"
           if [[ "$APP_ID" != "com.spotify.music" ]]; then
             echo "::error::Expected application ID com.spotify.music, found '$APP_ID'."
             exit 1
