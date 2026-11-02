@@ -52,8 +52,14 @@ jobs:
         run: |
           if [[ -n "$DEBUG_KEYSTORE_BASE64" ]]; then
             mkdir -p ~/.android
-            printf '%s' "$DEBUG_KEYSTORE_BASE64" | base64 --decode > ~/.android/debug.keystore
-            test -s ~/.android/debug.keystore
+            if printf '%s' "$DEBUG_KEYSTORE_BASE64" | base64 --decode > ~/.android/debug.keystore 2>/dev/null &&
+               [[ -s ~/.android/debug.keystore ]] &&
+               keytool -list -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey >/dev/null 2>&1; then
+              echo "Using the configured stable debug keystore."
+            else
+              rm -f ~/.android/debug.keystore
+              echo "::warning::DEBUG_KEYSTORE_BASE64 is invalid; Gradle will generate a temporary debug key for this CI-only build."
+            fi
           fi
 
       - run: chmod +x gradlew
@@ -232,7 +238,7 @@ jobs:
   release:
     name: Build and publish BitChord FC
     needs: [android, tv, web, backend]
-    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_release) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
