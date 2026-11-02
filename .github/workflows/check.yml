@@ -1,17 +1,27 @@
-name: Check
+name: Build, Test & Release
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish BitChord FC to GitHub Releases after all checks pass"
+        required: true
+        default: true
+        type: boolean
 
 concurrency:
-  group: check-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: bitchord-repository-workflows
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   android:
-    name: Android
+    name: Android phone tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,56 +35,377 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Write local.properties
+        env:
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+          LISTEN_TOGETHER_SERVER: ${{ secrets.LISTEN_TOGETHER_SERVER }}
         run: |
-          echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" > local.properties
-          echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
-          echo "LISTEN_TOGETHER_SERVER=${{ secrets.LISTEN_TOGETHER_SERVER }}" >> local.properties
+          {
+            printf 'LASTFM_API_KEY=%s\n' "$LASTFM_API_KEY"
+            printf 'LASTFM_SECRET=%s\n' "$LASTFM_SECRET"
+            printf 'LISTEN_TOGETHER_SERVER=%s\n' "$LISTEN_TOGETHER_SERVER"
+          } > local.properties
 
-      # The local debug key, so this APK installs over a local dev build and
-      # back. Fork PRs get no secrets; AGP then makes a throwaway key itself.
-      - name: Write the debug keystore
+      - name: Write the stable debug keystore when configured
         env:
           DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
-          [ -n "$DEBUG_KEYSTORE_BASE64" ] || exit 0
-          mkdir -p ~/.android
-          echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > ~/.android/debug.keystore
+          if [[ -n "$DEBUG_KEYSTORE_BASE64" ]]; then
+            mkdir -p ~/.android
+            if printf '%s' "$DEBUG_KEYSTORE_BASE64" | base64 --decode > ~/.android/debug.keystore 2>/dev/null &&
+               [[ -s ~/.android/debug.keystore ]] &&
+               keytool -list -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey >/dev/null 2>&1; then
+              echo "Using the configured stable debug keystore."
+            else
+              rm -f ~/.android/debug.keystore
+              echo "::warning::DEBUG_KEYSTORE_BASE64 is invalid; Gradle will generate a temporary debug key for this CI-only build."
+            fi
+          fi
 
       - run: chmod +x gradlew
 
-      - name: Tests
-        run: ./gradlew testDevDebugUnitTest
+      - name: Run phone unit tests only
+        run: ./gradlew :app:testDevDebugUnitTest -Pbitchord.bundleWear=false
 
-      - name: Build the dev APK
-        run: ./gradlew assembleDevDebug
+      - name: Build phone debug APK only
+        run: ./gradlew :app:assembleDevDebug -Pbitchord.bundleWear=false
 
-      - name: Upload the dev APK
+      - name: Upload phone debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: bitchord-dev-debug
+          name: bitchord-phone-dev-debug
           path: app/build/outputs/apk/dev/debug/*.apk
+          if-no-files-found: error
 
-      - name: Upload test reports
+      - name: Upload phone test reports
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: android-test-reports
           path: app/build/reports/tests/
 
-  backend:
-    name: Backend · Go
+  tv:
+    name: Android TV build
+    needs: android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Write local.properties
+        env:
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+          LISTEN_TOGETHER_SERVER: ${{ secrets.LISTEN_TOGETHER_SERVER }}
+        run: |
+          {
+            printf 'LASTFM_API_KEY=%s\n' "$LASTFM_API_KEY"
+            printf 'LASTFM_SECRET=%s\n' "$LASTFM_SECRET"
+            printf 'LISTEN_TOGETHER_SERVER=%s\n' "$LISTEN_TOGETHER_SERVER"
+          } > local.properties
+
+      - run: chmod +x gradlew
+
+      - name: Build TV debug APK only
+        run: ./gradlew :tv:assembleDevDebug -Pbitchord.bundleWear=false
+
+      - name: Upload TV debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitchord-tv-dev-debug
+          path: tv/build/outputs/apk/dev/debug/*universal*.apk
+          if-no-files-found: error
+
+  web:
+    name: Web, extension and shared package checks
+    needs: tv
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: backend
+        working-directory: web
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+        env:
+          VITE_PARTY_SERVER_URL: https://party.example.com
+
+  backend:
+    name: Backend checks and conditional deployment
+    needs: web
+    runs-on: ubuntu-latest
+    outputs:
+      backend_changed: ${{ steps.changed.outputs.backend }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect backend changes
+        id: changed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE_SHA"
+          else
+            base="$BEFORE_SHA"
+          fi
+
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            changed_files="$(git diff-tree --no-commit-id --name-only -r "$TARGET_SHA")"
+          else
+            changed_files="$(git diff --name-only "$base" "$TARGET_SHA")"
+          fi
+
+          printf '%s\n' "$changed_files"
+          if grep -Eq '^(backend/|\.github/workflows/deploy-backend\.yml$)' <<< "$changed_files"; then
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "backend=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
-      - run: go build ./...
-      - run: go vet ./...
-      - run: go test ./...
+      - name: Build, vet and test backend
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          go build ./...
+          go vet ./...
+          go test ./...
+
+      - name: Deploy backend after successful checks
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.changed.outputs.backend == 'true' }}
+        env:
+          KEY: ${{ secrets.ORACLE_DEPLOY_KEY }}
+          HOST: ${{ secrets.ORACLE_HOST }}
+          KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy deploy@"$HOST"
+
+      - name: Verify backend deployment health
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.changed.outputs.backend == 'true' }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 12); do
+            curl -fsS https://api.bitchord.kushagrasingh.in/healthz && exit 0
+            sleep 5
+          done
+          exit 1
+
+  release:
+    name: Build and publish BitChord FC
+    needs: [android, tv, web, backend]
+    permissions:
+      contents: write
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_release) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Calculate unique Android release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_VERSION="$(sed -nE 's/^val defaultBitchordVersionName = "([^"]+)".*/\1/p' build.gradle.kts | head -n 1)"
+          if [[ -z "$BASE_VERSION" ]]; then
+            echo "::error::Could not read defaultBitchordVersionName from build.gradle.kts"
+            exit 1
+          fi
+          VERSION_NAME="${BASE_VERSION}.${GITHUB_RUN_NUMBER}"
+          VERSION_CODE=$((100000 + GITHUB_RUN_NUMBER))
+          echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "BitChord FC version: $VERSION_NAME (versionCode $VERSION_CODE)"
+
+      - name: Validate and configure a persistent signing key
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          STORE_FILE="bitchord-release.jks"
+          STORE_PASSWORD=""
+          ALIAS=""
+          KEY_PASS=""
+
+          # Prefer the configured release key; validate it before Gradle starts.
+          if [[ -n "$KEYSTORE_BASE64" && -n "$KEYSTORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
+            rm -f "$STORE_FILE"
+            if printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$STORE_FILE" 2>/dev/null &&
+               [[ -s "$STORE_FILE" ]] &&
+               keytool -list -keystore "$STORE_FILE" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
+              STORE_PASSWORD="$KEYSTORE_PASSWORD"
+              ALIAS="$KEY_ALIAS"
+              KEY_PASS="$KEY_PASSWORD"
+              echo "Using the configured release keystore."
+            fi
+          fi
+
+          # BitChord FC has not been published before. A persistent repository
+          # debug key is an installable fallback; it must remain unchanged for
+          # all future updates. Never use a runner-generated ephemeral key.
+          if [[ -z "$STORE_PASSWORD" && -n "$DEBUG_KEYSTORE_BASE64" ]]; then
+            rm -f "$STORE_FILE"
+            if printf '%s' "$DEBUG_KEYSTORE_BASE64" | base64 --decode > "$STORE_FILE" 2>/dev/null &&
+               [[ -s "$STORE_FILE" ]] &&
+               keytool -list -keystore "$STORE_FILE" -storepass android -alias androiddebugkey >/dev/null 2>&1; then
+              STORE_PASSWORD="android"
+              ALIAS="androiddebugkey"
+              KEY_PASS="android"
+              echo "::warning::Using the persistent DEBUG_KEYSTORE_BASE64 signing key for BitChord FC. Keep this secret unchanged for all future updates."
+            fi
+          fi
+
+          if [[ -z "$STORE_PASSWORD" ]]; then
+            echo "::error::No valid persistent signing keystore is configured. Fix KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD, or add a valid stable DEBUG_KEYSTORE_BASE64 secret. The build stopped before Gradle so it will not publish an APK that cannot be updated safely."
+            exit 1
+          fi
+
+          {
+            printf 'storeFile=%s\n' "$STORE_FILE"
+            printf 'storePassword=%s\n' "$STORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$ALIAS"
+            printf 'keyPassword=%s\n' "$KEY_PASS"
+          } > keystore.properties
+
+      - name: Write local.properties
+        env:
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+          LISTEN_TOGETHER_SERVER: ${{ secrets.LISTEN_TOGETHER_SERVER }}
+        run: |
+          {
+            printf 'LASTFM_API_KEY=%s\n' "$LASTFM_API_KEY"
+            printf 'LASTFM_SECRET=%s\n' "$LASTFM_SECRET"
+            printf 'LISTEN_TOGETHER_SERVER=%s\n' "$LISTEN_TOGETHER_SERVER"
+          } > local.properties
+
+      - run: chmod +x gradlew
+
+      - name: Build BitChord FC phone APK only
+        run: >
+          ./gradlew :app:assembleSpotifyRelease
+          -Pbitchord.bundleWear=false
+          -PbitchordVersionCode=${{ steps.version.outputs.code }}
+          -PbitchordVersionName=${{ steps.version.outputs.name }}
+
+      - name: Prepare APK assets and SHA-256 checksums
+        shell: bash
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p release-assets
+          apks=(app/build/outputs/apk/spotify/release/*.apk)
+          if (( ${#apks[@]} == 0 )); then
+            echo "::error::No BitChord FC APKs were produced."
+            exit 1
+          fi
+
+          universal=""
+          for apk in "${apks[@]}"; do
+            base="$(basename "$apk")"
+            if [[ "$base" != *"armeabi-v7a"* && "$base" != *"arm64-v8a"* && "$base" != *"x86_64"* ]]; then
+              universal="$apk"
+              break
+            fi
+          done
+
+          if [[ -z "$universal" ]]; then
+            echo "::error::Universal BitChord FC APK was not produced."
+            exit 1
+          fi
+          cp "$universal" "release-assets/BitChordFC-$VERSION_NAME.apk"
+
+          for apk in "${apks[@]}"; do
+            [[ "$apk" == "$universal" ]] && continue
+            base="$(basename "$apk")"
+            for abi in armeabi-v7a arm64-v8a x86_64; do
+              if [[ "$base" == *"$abi"* ]]; then
+                cp "$apk" "release-assets/BitChordFC-${VERSION_NAME}_${abi}.apk"
+                break
+              fi
+            done
+          done
+
+          (
+            cd release-assets
+            sha256sum ./*.apk > SHA256SUMS.txt
+          )
+          ls -lh release-assets
+
+      - name: Preserve downloadable Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitchord-fc-${{ steps.version.outputs.name }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish BitChord FC to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.name }}
+          name: BitChord FC v${{ steps.version.outputs.name }}
+          make_latest: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          files: release-assets/*
