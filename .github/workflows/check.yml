@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   android:
@@ -238,6 +238,8 @@ jobs:
   release:
     name: Build and publish BitChord FC
     needs: [android, tv, web, backend]
+    permissions:
+      contents: write
     if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_release) }}
     runs-on: ubuntu-latest
     steps:
