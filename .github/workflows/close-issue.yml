@@ -4,6 +4,10 @@ on:
   issue_comment:
     types: [created]
 
+concurrency:
+  group: bitchord-repository-workflows
+  cancel-in-progress: false
+
 permissions:
   issues: write
 

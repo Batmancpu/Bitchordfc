@@ -101,6 +101,11 @@ android {
         // the same GitHub release, told apart by file name. See
         // AppUpdateChecker.apkAssetUrl.
         buildConfigField("String", "UPDATE_APK_PREFIX", "\"BitChord-\"")
+        buildConfigField(
+            "String",
+            "UPDATE_RELEASE_URL",
+            "\"https://api.github.com/repos/kushagrasinghx/BitChord/releases/latest\"",
+        )
     }
 
     splits {
@@ -138,6 +143,20 @@ android {
         create("prod") {
             dimension = "env"
             // Matches defaultConfig — this is the package already shipped/installed.
+        }
+        // ColorOS Fluid Cloud recognizes Spotify's media package identity.
+        // This separate identity allows BitChord FC to coexist with BitChord.
+        // Keep the Kotlin namespace unchanged so application classes do not move.
+        create("spotify") {
+            dimension = "env"
+            applicationId = "com.spotify.music"
+            resValue("string", "app_name", "BitChord FC")
+            buildConfigField("String", "UPDATE_APK_PREFIX", "\"BitChordFC-\"")
+            buildConfigField(
+                "String",
+                "UPDATE_RELEASE_URL",
+                "\"https://api.github.com/repos/Batmancpu/Bitchordfc/releases/latest\"",
+            )
         }
     }
 

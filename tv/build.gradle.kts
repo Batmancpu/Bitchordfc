@@ -103,6 +103,11 @@ android {
         // the updater installs the TV app here, never the phone app. See
         // AppUpdateChecker.apkAssetUrl.
         buildConfigField("String", "UPDATE_APK_PREFIX", "\"BitChordTV-\"")
+        buildConfigField(
+            "String",
+            "UPDATE_RELEASE_URL",
+            "\"https://api.github.com/repos/kushagrasinghx/BitChord/releases/latest\"",
+        )
     }
 
     splits {

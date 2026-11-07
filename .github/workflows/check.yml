@@ -1,80 +1,193 @@
-name: Check
+name: BitChord FC Android APK
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish BitChord FC after Android phone tests pass"
+        required: true
+        default: true
+        type: boolean
 
 concurrency:
-  group: check-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: bitchordfc-android-ci-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   android:
-    name: Android
+    name: Android phone unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-
       - uses: gradle/actions/setup-gradle@v4
-
-      - name: Write local.properties
-        run: |
-          echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" > local.properties
-          echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
-          echo "LISTEN_TOGETHER_SERVER=${{ secrets.LISTEN_TOGETHER_SERVER }}" >> local.properties
-
-      # The local debug key, so this APK installs over a local dev build and
-      # back. Fork PRs get no secrets; AGP then makes a throwaway key itself.
-      - name: Write the debug keystore
+      - name: Write optional local.properties
         env:
-          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+          LISTEN_TOGETHER_SERVER: ${{ secrets.LISTEN_TOGETHER_SERVER }}
         run: |
-          [ -n "$DEBUG_KEYSTORE_BASE64" ] || exit 0
-          mkdir -p ~/.android
-          echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > ~/.android/debug.keystore
-
+          {
+            printf 'LASTFM_API_KEY=%s\\n' "$LASTFM_API_KEY"
+            printf 'LASTFM_SECRET=%s\\n' "$LASTFM_SECRET"
+            printf 'LISTEN_TOGETHER_SERVER=%s\\n' "$LISTEN_TOGETHER_SERVER"
+          } > local.properties
       - run: chmod +x gradlew
+      - name: Run phone unit tests
+        run: ./gradlew :app:testDevDebugUnitTest -Pbitchord.bundleWear=false
 
-      - name: Tests
-        run: ./gradlew testDevDebugUnitTest
-
-      - name: Build the dev APK
-        run: ./gradlew assembleDevDebug
-
-      - name: Upload the dev APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: bitchord-dev-debug
-          path: app/build/outputs/apk/dev/debug/*.apk
-
-      - name: Upload test reports
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-test-reports
-          path: app/build/reports/tests/
-
-  backend:
-    name: Backend · Go
+  release:
+    name: Build and publish BitChord FC
+    needs: android
+    permissions:
+      contents: write
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_release) }}
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-
-      - run: go build ./...
-      - run: go vet ./...
-      - run: go test ./...
+          java-version: '17'
+          distribution: 'temurin'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Calculate increasing app version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEFAULT_VERSION="$(sed -nE 's/^val defaultBitchordVersionName = "([^"]+)".*/\\1/p' build.gradle.kts | head -n 1)"
+          if [[ -z "$DEFAULT_VERSION" || "$DEFAULT_VERSION" != *.* ]]; then
+            echo "::error::Could not read defaultBitchordVersionName from build.gradle.kts"
+            exit 1
+          fi
+          VERSION_PREFIX="${DEFAULT_VERSION%.*}"
+          VERSION_NAME="${VERSION_PREFIX}.${GITHUB_RUN_NUMBER}"
+          VERSION_CODE=$((200000 + GITHUB_RUN_NUMBER))
+          echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "BitChord FC version: $VERSION_NAME (versionCode $VERSION_CODE)"
+      - name: Configure persistent signing key
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          STORE_FILE="bitchord-fc-release.jks"
+          if [[ -z "$KEYSTORE_BASE64" || -z "$KEYSTORE_PASSWORD" || -z "$KEY_ALIAS" || -z "$KEY_PASSWORD" ]]; then
+            echo "::error::Configure KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD as repository Actions secrets before the first release."
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$STORE_FILE"
+          if [[ ! -s "$STORE_FILE" ]] || ! keytool -list -keystore "$STORE_FILE" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
+            echo "::error::The configured Android signing keystore is invalid or its credentials do not match."
+            exit 1
+          fi
+          {
+            printf 'storeFile=%s\\n' "$STORE_FILE"
+            printf 'storePassword=%s\\n' "$KEYSTORE_PASSWORD"
+            printf 'keyAlias=%s\\n' "$KEY_ALIAS"
+            printf 'keyPassword=%s\\n' "$KEY_PASSWORD"
+          } > keystore.properties
+      - name: Write optional local.properties
+        env:
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+          LISTEN_TOGETHER_SERVER: ${{ secrets.LISTEN_TOGETHER_SERVER }}
+        run: |
+          {
+            printf 'LASTFM_API_KEY=%s\\n' "$LASTFM_API_KEY"
+            printf 'LASTFM_SECRET=%s\\n' "$LASTFM_SECRET"
+            printf 'LISTEN_TOGETHER_SERVER=%s\\n' "$LISTEN_TOGETHER_SERVER"
+          } > local.properties
+      - run: chmod +x gradlew
+      - name: Build Fluid Cloud phone APK only
+        run: >
+          ./gradlew :app:assembleSpotifyRelease
+          -Pbitchord.bundleWear=false
+          -PbitchordVersionCode=${{ steps.version.outputs.code }}
+          -PbitchordVersionName=${{ steps.version.outputs.name }}
+      - name: Verify package ID, signature and APK
+        shell: bash
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p release-assets
+          apks=(app/build/outputs/apk/spotify/release/*.apk)
+          if (( ${#apks[@]} == 0 )); then
+            echo "::error::No BitChord FC APK was produced."
+            exit 1
+          fi
+          universal=""
+          for apk in "${apks[@]}"; do
+            name="$(basename "$apk")"
+            if [[ "$name" != *"armeabi-v7a"* && "$name" != *"arm64-v8a"* && "$name" != *"x86_64"* ]]; then
+              universal="$apk"
+              break
+            fi
+          done
+          if [[ -z "$universal" ]]; then
+            echo "::error::Universal APK was not produced."
+            exit 1
+          fi
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [[ -z "$SDK_ROOT" ]]; then
+            echo "::error::Android SDK path is unavailable."
+            exit 1
+          fi
+          AAPT="$(find "$SDK_ROOT/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+          APKSIGNER="$(find "$SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          if [[ -z "$AAPT" || -z "$APKSIGNER" ]]; then
+            echo "::error::Android APK verification tools are unavailable."
+            exit 1
+          fi
+          APP_ID="$("$AAPT" dump badging "$universal" | awk -F"'" '/^package:/{print $2; exit}')"
+          if [[ "$APP_ID" != "com.spotify.music" ]]; then
+            echo "::error::Expected com.spotify.music; found '$APP_ID'."
+            exit 1
+          fi
+          "$APKSIGNER" verify --verbose "$universal"
+          cp "$universal" "release-assets/BitChordFC-$VERSION_NAME.apk"
+          (
+            cd release-assets
+            sha256sum ./*.apk > SHA256SUMS.txt
+          )
+          test -s "release-assets/BitChordFC-$VERSION_NAME.apk"
+          echo "Verified package ID: $APP_ID"
+      - name: Preserve downloadable Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitchord-fc-${{ steps.version.outputs.name }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish BitChord FC release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.name }}
+          name: BitChord FC v${{ steps.version.outputs.name }}
+          prerelease: false
+          make_latest: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          body: |
+            Fluid Cloud Android build.
+            Package ID: `com.spotify.music`.
+            Signed with the repository's persistent signing key. Keep that key unchanged for future updates.
+          files: release-assets/*
