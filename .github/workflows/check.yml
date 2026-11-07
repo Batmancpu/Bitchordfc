@@ -242,12 +242,17 @@ jobs:
           # The v1.9.8 release is the documented one-time migration boundary.
           # Every release after the first permanent-key release must retain the
           # exact same signer or it will not update in place on Android.
-          if ! gh api "repos/$GITHUB_REPOSITORY/releases/latest" > previous-release.json; then
-            echo "::error::Could not read the previous GitHub Release; refusing to publish without checking signing continuity."
+          if ! gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > previous-releases.json; then
+            echo "::error::Could not list previous GitHub Releases; refusing to publish without checking signing continuity."
             exit 1
           fi
-          PREVIOUS_TAG="$(jq -r '.tag_name // empty' previous-release.json)"
-          EXPECTED_SIGNER="$(jq -r '.body // ""' previous-release.json | awk -F': ' '/^Signing certificate SHA-256: / { gsub(/\x60/, "", $2); print tolower($2); exit }')"
+          PREVIOUS_RELEASE="$(jq -c '[.[] | select(.draft == false)] | .[0] // {}' previous-releases.json)"
+          PREVIOUS_TAG="$(jq -r '.tag_name // empty' <<< "$PREVIOUS_RELEASE")"
+          EXPECTED_SIGNER="$(jq -r '.body // ""' <<< "$PREVIOUS_RELEASE" | awk -F': ' '/^Signing certificate SHA-256: / { gsub(/\x60/, "", $2); print tolower($2); exit }')"
+          if [[ -z "$PREVIOUS_TAG" ]]; then
+            echo "::error::No previously published release found; refusing to publish without an established signing baseline."
+            exit 1
+          fi
           if [[ "$PREVIOUS_TAG" == "v1.9.8" && -z "$EXPECTED_SIGNER" ]]; then
             echo "::warning::One-time signing migration from v1.9.8. That old APK cannot be updated in place; uninstall it once before installing this release."
           elif [[ -z "$EXPECTED_SIGNER" ]]; then
