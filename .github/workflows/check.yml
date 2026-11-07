@@ -135,7 +135,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          DEFAULT_VERSION="$(sed -nE 's/^val defaultBitchordVersionName = "([^"]+)".*/\\1/p' build.gradle.kts | head -n 1)"
+          DEFAULT_VERSION="$(awk -F'"' '/^val defaultBitchordVersionName = / { print $2; exit }' build.gradle.kts)"
           if [[ -z "$DEFAULT_VERSION" || "$DEFAULT_VERSION" != *.* ]]; then
             echo "::error::Could not read defaultBitchordVersionName from build.gradle.kts"
             exit 1
