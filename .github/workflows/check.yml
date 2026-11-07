@@ -78,9 +78,9 @@ jobs:
           LISTEN_TOGETHER_SERVER: ${{ secrets.LISTEN_TOGETHER_SERVER }}
         run: |
           {
-            printf 'LASTFM_API_KEY=%s\\n' "$LASTFM_API_KEY"
-            printf 'LASTFM_SECRET=%s\\n' "$LASTFM_SECRET"
-            printf 'LISTEN_TOGETHER_SERVER=%s\\n' "$LISTEN_TOGETHER_SERVER"
+            printf 'LASTFM_API_KEY=%s\n' "$LASTFM_API_KEY"
+            printf 'LASTFM_SECRET=%s\n' "$LASTFM_SECRET"
+            printf 'LISTEN_TOGETHER_SERVER=%s\n' "$LISTEN_TOGETHER_SERVER"
           } > local.properties
       - run: chmod +x gradlew
       - name: Run phone unit tests
@@ -166,10 +166,10 @@ jobs:
             exit 1
           fi
           {
-            printf 'storeFile=%s\\n' "$STORE_FILE"
-            printf 'storePassword=%s\\n' "$KEYSTORE_PASSWORD"
-            printf 'keyAlias=%s\\n' "$KEY_ALIAS"
-            printf 'keyPassword=%s\\n' "$KEY_PASSWORD"
+            printf 'storeFile=%s\n' "$STORE_FILE"
+            printf 'storePassword=%s\n' "$KEYSTORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
           } > keystore.properties
       - name: Write optional local.properties
         env:
@@ -178,9 +178,9 @@ jobs:
           LISTEN_TOGETHER_SERVER: ${{ secrets.LISTEN_TOGETHER_SERVER }}
         run: |
           {
-            printf 'LASTFM_API_KEY=%s\\n' "$LASTFM_API_KEY"
-            printf 'LASTFM_SECRET=%s\\n' "$LASTFM_SECRET"
-            printf 'LISTEN_TOGETHER_SERVER=%s\\n' "$LISTEN_TOGETHER_SERVER"
+            printf 'LASTFM_API_KEY=%s\n' "$LASTFM_API_KEY"
+            printf 'LASTFM_SECRET=%s\n' "$LASTFM_SECRET"
+            printf 'LISTEN_TOGETHER_SERVER=%s\n' "$LISTEN_TOGETHER_SERVER"
           } > local.properties
       - run: chmod +x gradlew
       - name: Build Fluid Cloud phone APK only
