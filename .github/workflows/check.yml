@@ -190,9 +190,11 @@ jobs:
           -PbitchordVersionCode=${{ steps.version.outputs.code }}
           -PbitchordVersionName=${{ steps.version.outputs.name }}
       - name: Verify package ID, signature and APK
+        id: verify
         shell: bash
         env:
           VERSION_NAME: ${{ steps.version.outputs.name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -231,6 +233,31 @@ jobs:
             exit 1
           fi
           "$APKSIGNER" verify --verbose "$universal"
+          SIGNER_SHA256="$("$APKSIGNER" verify --print-certs "$universal" | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print tolower($2); exit}')"
+          if [[ ! "$SIGNER_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
+            echo "::error::Could not read the APK signing certificate SHA-256 fingerprint."
+            exit 1
+          fi
+
+          # The v1.9.8 release is the documented one-time migration boundary.
+          # Every release after the first permanent-key release must retain the
+          # exact same signer or it will not update in place on Android.
+          if ! gh api "repos/$GITHUB_REPOSITORY/releases/latest" > previous-release.json; then
+            echo "::error::Could not read the previous GitHub Release; refusing to publish without checking signing continuity."
+            exit 1
+          fi
+          PREVIOUS_TAG="$(jq -r '.tag_name // empty' previous-release.json)"
+          EXPECTED_SIGNER="$(jq -r '.body // ""' previous-release.json | sed -nE 's/^Signing certificate SHA-256: `?([A-Fa-f0-9]{64})`?$/\1/p' | tr 'A-F' 'a-f')"
+          if [[ "$PREVIOUS_TAG" == "v1.9.8" && -z "$EXPECTED_SIGNER" ]]; then
+            echo "::warning::One-time signing migration from v1.9.8. That old APK cannot be updated in place; uninstall it once before installing this release."
+          elif [[ -z "$EXPECTED_SIGNER" ]]; then
+            echo "::error::The previous release has no pinned signing certificate fingerprint; refusing to publish."
+            exit 1
+          elif [[ "$EXPECTED_SIGNER" != "$SIGNER_SHA256" ]]; then
+            echo "::error::Signing certificate mismatch. Previous: $EXPECTED_SIGNER; current: $SIGNER_SHA256. Refusing an update-incompatible release."
+            exit 1
+          fi
+          echo "signer_sha256=$SIGNER_SHA256" >> "$GITHUB_OUTPUT"
           cp "$universal" "release-assets/BitChordFC-$VERSION_NAME.apk"
           (
             cd release-assets
@@ -258,5 +285,7 @@ jobs:
           body: |
             Fluid Cloud Android build.
             Package ID: `com.spotify.music`.
-            Signed with the repository's persistent signing key. Keep that key unchanged for future updates.
+            Signed with the repository's persistent signing key.
+            Signing certificate SHA-256: `${{ steps.verify.outputs.signer_sha256 }}`
+            Keep this signing certificate unchanged; releases with a different signer are blocked.
           files: release-assets/*
