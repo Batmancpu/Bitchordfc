@@ -247,7 +247,7 @@ jobs:
             exit 1
           fi
           PREVIOUS_TAG="$(jq -r '.tag_name // empty' previous-release.json)"
-          EXPECTED_SIGNER="$(jq -r '.body // ""' previous-release.json | sed -nE 's/^Signing certificate SHA-256: `?([A-Fa-f0-9]{64})`?$/\1/p' | tr 'A-F' 'a-f')"
+          EXPECTED_SIGNER="$(jq -r '.body // ""' previous-release.json | awk -F': ' '/^Signing certificate SHA-256: / { gsub(/\x60/, "", $2); print tolower($2); exit }')"
           if [[ "$PREVIOUS_TAG" == "v1.9.8" && -z "$EXPECTED_SIGNER" ]]; then
             echo "::warning::One-time signing migration from v1.9.8. That old APK cannot be updated in place; uninstall it once before installing this release."
           elif [[ -z "$EXPECTED_SIGNER" ]]; then
