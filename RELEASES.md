@@ -6,7 +6,7 @@ This fork follows upstream BitChord and adds one phone application variant for C
 
 1. A push or merged pull request to `main` runs Android phone unit tests.
 2. When tests pass on `main`, GitHub builds only the `SpotifyRelease` phone variant.
-3. The workflow verifies the package ID and signing certificate, then publishes one universal APK plus a SHA-256 checksum as a GitHub Release.
+3. The workflow verifies the package ID and APK signature, compares the signing certificate fingerprint with the previous release, and blocks publication if the signer changes; it then publishes one universal APK plus a SHA-256 checksum.
 4. Obtainium tracks the repository's GitHub Releases and installs newer APKs.
 
 | Setting | Value |
@@ -38,7 +38,7 @@ keytool -genkeypair -v -keystore bitchord-fc-release.jks -storetype JKS -storepa
 base64 -w 0 bitchord-fc-release.jks
 ```
 
-Do not replace or regenerate the key after publishing. If secrets are absent or invalid, the release job fails rather than publishing an APK that cannot be upgraded.
+Do not replace or regenerate the key after publishing. Each new release records its signing certificate SHA-256 fingerprint. Subsequent builds compare their signer with that recorded fingerprint and fail closed on any mismatch; they also fail if the previous release cannot be checked. If secrets are absent or invalid, no APK is published.
 
 ## Versioning
 
