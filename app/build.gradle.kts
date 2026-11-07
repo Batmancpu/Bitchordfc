@@ -72,6 +72,8 @@ android {
     namespace = "com.music.bitchord"
     // InnerTubeX's AAR requires compiling against 37; targetSdk (runtime behaviour) stays 36.
     compileSdk = 37
+    // Pin the native toolchain used by app/src/main/cpp and CI.
+    ndkVersion = "27.0.12077973"
 
     defaultConfig {
         applicationId = "com.music.bitchord"

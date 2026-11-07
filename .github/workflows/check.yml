@@ -3,6 +3,17 @@ name: BitChord FC Android APK
 on:
   push:
     branches: [main]
+    paths:
+      - 'app/**'
+      - 'shared/**'
+      - 'sharedUi/**'
+      - 'native/**'
+      - 'wearos/protocol/**'
+      - 'gradle/**'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/check.yml'
   pull_request:
   workflow_dispatch:
     inputs:
@@ -14,7 +25,7 @@ on:
 
 concurrency:
   group: bitchordfc-android-ci-release
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -30,6 +41,35 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+      - name: Install pinned Android NDK and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [[ -z "$SDK_ROOT" ]]; then
+            echo "::error::Android SDK root is unavailable."
+            exit 1
+          fi
+          install_sdk_package() {
+            local package="$1"
+            local attempt
+            for attempt in 1 2 3; do
+              if sdkmanager --install "$package"; then
+                return 0
+              fi
+              echo "::warning::Retrying SDK package $package after failed attempt $attempt."
+              rm -rf "$SDK_ROOT/.temp" "$SDK_ROOT/.downloadIntermediates"
+              sleep $((attempt * 5))
+            done
+            echo "::error::Could not install Android SDK package $package after three attempts."
+            return 1
+          }
+          install_sdk_package "ndk;27.0.12077973"
+          install_sdk_package "cmake;3.22.1"
+          test -x "$SDK_ROOT/ndk/27.0.12077973/ndk-build"
+          test -d "$SDK_ROOT/cmake/3.22.1"
       - uses: gradle/actions/setup-gradle@v4
       - name: Write optional local.properties
         env:
@@ -60,6 +100,35 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+      - name: Install pinned Android NDK and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [[ -z "$SDK_ROOT" ]]; then
+            echo "::error::Android SDK root is unavailable."
+            exit 1
+          fi
+          install_sdk_package() {
+            local package="$1"
+            local attempt
+            for attempt in 1 2 3; do
+              if sdkmanager --install "$package"; then
+                return 0
+              fi
+              echo "::warning::Retrying SDK package $package after failed attempt $attempt."
+              rm -rf "$SDK_ROOT/.temp" "$SDK_ROOT/.downloadIntermediates"
+              sleep $((attempt * 5))
+            done
+            echo "::error::Could not install Android SDK package $package after three attempts."
+            return 1
+          }
+          install_sdk_package "ndk;27.0.12077973"
+          install_sdk_package "cmake;3.22.1"
+          test -x "$SDK_ROOT/ndk/27.0.12077973/ndk-build"
+          test -d "$SDK_ROOT/cmake/3.22.1"
       - uses: gradle/actions/setup-gradle@v4
       - name: Calculate increasing app version
         id: version
